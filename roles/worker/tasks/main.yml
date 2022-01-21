@@ -1,0 +1,36 @@
+---
+- name: I am worker
+  shell: 'echo "Im worker"'
+- when: '"nodejs" not in ansible_facts.packages'
+  block:
+  - name: Add nodejs source
+    shell:
+      curl --silent --location https://deb.nodesource.com/setup_16.x | bash -
+  - name: Install nodejs
+    package:
+      name: nodejs
+      state: present
+- name: Git checkout
+  git:
+    repo: 'https://gitlab.ensimag.fr/cis4/worker-app.git'
+    dest: /opt/app
+- name: Install app packages
+  ignore_errors: yes
+  shell: npm i
+  args:
+    chdir: /opt/app
+- name: Setup network for non-root
+  shell: >
+    iptables -A INPUT -i ens4 -p tcp --dport 443 -j ACCEPT && \
+    iptables -A PREROUTING -t nat -i ens4 -p tcp --dport 443 -j REDIRECT --to-port 4443
+- name: Create systemd unit file
+  copy:
+    src: app.service
+    dest: /lib/systemd/system/app.service
+- name: Reload the system configuration (registers new unit)
+  shell: systemctl daemon-reload
+- name: Start app service
+  systemd:
+    name: app.service
+    enabled: true
+    state: started

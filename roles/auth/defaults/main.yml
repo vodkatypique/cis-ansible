@@ -1,0 +1,40 @@
+ldap_domain: 'cis.local'
+ldap_top_organization: 'cis'
+ldap_data_password: 'changeme'
+# ldap_config_password: 'changed'
+# slappasswd -h {SHA} -s $ldap_config_password
+# FIXME: move to vault
+ldap_config_password_hash: '{SHA}1zIvTx2cSLhrqsiNS65zdTz/c3g='
+ldap_certificate_file: '/etc/ldap/cert.pem'
+ldap_certificate_key_file: '/etc/ldap/privkey.pem'
+ldap_certificate_chain_file: '/etc/ldap/chain.pem'
+ldap_access_rules:
+  # value are in YAML folded style (newlines are replaced with spaces) with chomping (no newline at the end)
+  - >-
+    to attrs=userPassword
+    by self write
+    by anonymous auth
+    by * none
+  - >-
+    to attrs=shadowLastChange
+    by self write
+    by * read
+  - >-
+    to *
+    by self read
+    by * break
+  - >-
+    to *
+    by users search
+    by * break
+ldap_size_limit: unlimited
+ldap_users:
+  - user: toto
+    password: toto
+    description: "test user"
+  - user: tata
+    password: password
+    description: "second test user"
+
+ldap_basedn: '{{ "dc=" + ldap_domain.split(".") | join(",dc=") }}'
+ldap_data_admin_dn: '{{ "cn=admin," + ldap_basedn }}'

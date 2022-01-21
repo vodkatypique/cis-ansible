@@ -1,0 +1,11 @@
+- hosts: localhost
+  connection: local
+  become: true
+
+  tasks:
+  - name: Gather package facts
+    package_facts:
+      manager: auto
+  - name: Run instance app_role
+    include_role:
+      name: "{{app_role}}"

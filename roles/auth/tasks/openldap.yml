@@ -1,0 +1,156 @@
+- name: "compute base DN"
+  set_fact:
+    ldap_basedn: '{{ "dc=" + ldap_domain.split(".") | join(",dc=") }}'
+
+- name: "compute data admin DN"
+  set_fact:
+    ldap_data_admin_dn: '{{ "cn=admin," + ldap_basedn }}'
+
+- name: "backports repo"
+  apt_repository:
+    repo: "deb http://deb.debian.org/debian {{ ansible_distribution_release }}-backports main"
+    state: present
+    filename: "{{ ansible_distribution_release }}-backports"
+    update_cache: yes
+
+# available debconf options for slapd are in https://salsa.debian.org/openldap-team/openldap/-/blob/master/debian/slapd.templates
+- name: "configure domain for OpenLDAP using debconf"
+  debconf:
+    name: slapd
+    question: slapd/domain
+    vtype: string
+    value: '{{ ldap_domain }}'
+
+- name: "configure attribute o for top entry using debconf"
+  debconf:
+    name: slapd
+    question: shared/organization
+    vtype: string
+    value: "{{ ldap_top_organization }}"
+
+- name: "configure purging OpenLDAP database when uninstalling using debconf"
+  debconf:
+    name: slapd
+    question: slapd/purge_database
+    vtype: boolean
+    value: 'true'
+
+- name: "configure data admin password for OpenLDAP using debconf"
+  debconf:
+    name: slapd
+    question: "{{ item }}"
+    vtype: password
+    value: "{{ ldap_data_password }}"
+  # wrongly reports as changed even when not changed, see https://github.com/ansible/ansible/issues/47676
+  changed_when: False
+  no_log: True
+  loop:
+    - slapd/password1
+    - slapd/password2
+
+- name: "install software packages"
+  apt:
+    state: present
+    default_release: "{{ ansible_distribution_release }}-backports"
+    name:
+      - slapd
+      - ldap-utils
+      - python3-ldap
+
+# libldap-common is a dependency for python-apt so it is already installed in older version
+# and thus not upgraded by the previous step
+- name: "update libldap-common to latest version"
+  apt:
+    state: latest
+    default_release: "{{ ansible_distribution_release }}-backports"
+    name: libldap-common
+
+- name: "make sure the /etc/ldap/ldap.conf file exists (it is part of package libldap-common)"
+  template:
+    backup: true
+    src: ldap.conf.j2
+    dest: /etc/ldap/ldap.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+# SHA is used for idempotency, SSHA has different salt each time
+#- name: "compute config admin password hash"
+#  command:
+#    argv: [ 'slappasswd', '-h', '{SHA}', '-s', "{{ ldap_config_password }}" ]
+#  register: ldap_config_admin_password_hash
+#  changed_when: False
+#  no_log: True
+
+- name: "set config admin password"
+  ldap_attrs:
+    dn: olcDatabase={0}config,cn=config
+    attributes:
+      olcRootPW: "{{ ldap_config_password_hash }}"
+    state: exact
+  no_log: True
+
+- name: "add openldap user to ssl-cert group"
+  user:
+    name: openldap
+    groups: ssl-cert
+    append: yes
+  register: openldap_ssl_cert_group
+
+- name: "restart OpenLDAP after openldap user added to group ssl-cert"
+  service:
+    name: slapd
+    state: restarted
+  when: openldap_ssl_cert_group.changed
+
+- name: "modify LDAP TLS settings"
+  ldap_attrs:
+    dn: cn=config
+    attributes:
+      olcTLSCertificateFile: "{{ ldap_certificate_file }}"
+      olcTLSCertificateKeyFile: "{{ ldap_certificate_key_file }}"
+      olcTLSCACertificateFile: "{{ ldap_certificate_chain_file }}"
+    state: exact
+  register: ssl_ldif
+
+- name: "enable secure port, plain ldap and local connection"
+  lineinfile:
+    dest: /etc/default/slapd
+    regexp: ^SLAPD_SERVICES=
+    line: SLAPD_SERVICES="ldaps:/// ldapi:/// ldap:///"
+  register: secure_port_enabled
+
+- name: "restart OpenLDAP after enabling TLS"
+  service:
+    name: slapd
+    state: restarted
+  when: secure_port_enabled.changed or ssl_ldif.changed
+
+- name: "create users"
+  include_tasks: user_entry.yml
+  loop: "{{ ldap_users }}"
+  loop_control:
+    loop_var: user_entry
+
+- name: "set access rules"
+  ldap_attrs:
+    dn: olcDatabase={1}mdb,cn=config
+    attributes:
+      olcAccess: "{{ ldap_access_rules }}"
+    ordered: yes
+    state: exact
+
+- name: "set unlimited size of searches"
+  ldap_attrs:
+    dn: olcDatabase={-1}frontend,cn=config
+    attributes:
+      olcSizeLimit: "{{ ldap_size_limit }}"
+    state: exact
+
+- name: "create ou=People branch"
+  ldap_entry:
+    dn: "ou=People,{{ ldap_basedn }}"
+    objectClass: organizationalUnit
+    state: present
+    bind_dn: "{{ ldap_data_admin_dn }}"
+    bind_pw: "{{ ldap_data_password }}"

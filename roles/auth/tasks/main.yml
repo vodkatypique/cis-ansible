@@ -1,0 +1,11 @@
+---
+- name: I am auth
+  shell: 'echo "Im auth"'
+- when: '"slapd" not in ansible_facts.packages'
+  include_tasks: openldap.yml
+  tags:
+    - openldap
+
+- name: "flush handlers"
+  meta: flush_handlers
+

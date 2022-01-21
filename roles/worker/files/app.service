@@ -1,0 +1,15 @@
+[Unit]
+Description=App Service
+After=syslog.target
+
+[Service]
+Type=simple
+User=rayman
+Group=rayman
+WorkingDirectory=/opt/app
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
